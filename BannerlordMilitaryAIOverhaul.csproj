@@ -1,0 +1,117 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+
+    <!--
+      Set the install root with BANNERLORD_DIR or the BannerlordDir MSBuild
+      property. DeployToGame=true opts in to copying the built module.
+    -->
+    <BannerlordDir Condition="'$(BannerlordDir)' == '' AND '$(BANNERLORD_DIR)' != ''">$(BANNERLORD_DIR)</BannerlordDir>
+    <DeployToGame Condition="'$(DeployToGame)' == ''">false</DeployToGame>
+    <GameBinDir>$(BannerlordDir)\bin\Win64_Shipping_Client</GameBinDir>
+    <GameModulesDir>$(BannerlordDir)\Modules</GameModulesDir>
+
+    <!-- Target .NET Framework 4.7.2 so it runs on Bannerlord's CLR -->
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AssemblyName>BannerlordMilitaryAIOverhaul</AssemblyName>
+    <RootNamespace>BannerlordMilitaryAIOverhaul</RootNamespace>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <DefineConstants Condition="'$(CampaignAcceptance)' == 'true'">$(DefineConstants);CAMPAIGN_ACCEPTANCE</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Mod-provided assemblies live in the mod folders, not the game bin. -->
+    <Reference Include="0Harmony">
+      <HintPath>$(GameModulesDir)\Bannerlord.Harmony\bin\Win64_Shipping_Client\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(GameBinDir)\Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.CampaignSystem">
+      <HintPath>$(GameBinDir)\TaleWorlds.CampaignSystem.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.Core">
+      <HintPath>$(GameBinDir)\TaleWorlds.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.Library">
+      <HintPath>$(GameBinDir)\TaleWorlds.Library.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.LinQuick">
+      <HintPath>$(GameBinDir)\TaleWorlds.LinQuick.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.Localization">
+      <HintPath>$(GameBinDir)\TaleWorlds.Localization.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.ObjectSystem">
+      <HintPath>$(GameBinDir)\TaleWorlds.ObjectSystem.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.SaveSystem">
+      <HintPath>$(GameBinDir)\TaleWorlds.SaveSystem.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.MountAndBlade">
+      <HintPath>$(GameBinDir)\TaleWorlds.MountAndBlade.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaleWorlds.InputSystem">
+      <HintPath>$(GameBinDir)\TaleWorlds.InputSystem.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SandBox">
+      <HintPath>$(GameModulesDir)\SandBox\bin\Win64_Shipping_Client\SandBox.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="StoryMode">
+      <HintPath>$(GameModulesDir)\StoryMode\bin\Win64_Shipping_Client\StoryMode.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
+    <Compile Remove="Campaign\CampaignAcceptanceBehavior.cs" Condition="'$(CampaignAcceptance)' != 'true'" />
+    <ModuleSource Include="$(ProjectDir)_Module\**\*" />
+  </ItemGroup>
+
+  <Target Name="ValidateBannerlordReferences" BeforeTargets="PrepareForBuild" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="'$(BannerlordDir)' == ''"
+           Text="Set the BANNERLORD_DIR environment variable or pass -p:BannerlordDir pointing to the Bannerlord install root." />
+    <Error Condition="!Exists('$(GameBinDir)\TaleWorlds.CampaignSystem.dll')"
+           Text="Bannerlord game assemblies were not found in '$(GameBinDir)'. Set BannerlordDir or BANNERLORD_DIR to the Bannerlord install root." />
+    <Error Condition="!Exists('$(GameModulesDir)\Bannerlord.Harmony\bin\Win64_Shipping_Client\0Harmony.dll')"
+           Text="Harmony was not found under '$(GameModulesDir)\Bannerlord.Harmony'. Install the Bannerlord.Harmony module in this game installation." />
+  </Target>
+
+  <!--
+    Deployment is opt-in and leaves unrelated installed files in place.
+  -->
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(DeployToGame)' == 'true' AND Exists('$(ProjectDir)_Module\SubModule.xml')">
+    <PropertyGroup>
+      <ModRootDir>$(GameModulesDir)\BannerlordMilitaryAIOverhaul</ModRootDir>
+    </PropertyGroup>
+    <Message Importance="High" Text="Deploying to $(ModRootDir)" />
+    <Copy SourceFiles="@(ModuleSource)"
+           DestinationFiles="@(ModuleSource->'$(ModRootDir)\%(RecursiveDir)%(Filename)%(Extension)')" />
+    <MakeDir Directories="$(ModRootDir)\bin\Win64_Shipping_Client" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ModRootDir)\bin\Win64_Shipping_Client" />
+    <Delete Files="$(ModRootDir)\military_ai.cfg" Condition="Exists('$(ModRootDir)\military_ai.cfg')" />
+    <Message Importance="High" Text="Deploy OK - DLL is in $(ModRootDir)\bin\Win64_Shipping_Client" />
+  </Target>
+
+  <Target Name="DeploySkipped" AfterTargets="PostBuildEvent" Condition="'$(DeployToGame)' == 'true' AND !Exists('$(ProjectDir)_Module\SubModule.xml')">
+    <Message Importance="High" Text="Deploy skipped: _Module\SubModule.xml not found (module scaffold pending)." />
+  </Target>
+
+</Project>

@@ -1,0 +1,35 @@
+<Module>
+	<Name value="Bannerlord Military AI Overhaul" />
+	<Id value="BannerlordMilitaryAIOverhaul" />
+	<Version value="v0.3.13" />
+	<SingleplayerModule value="true" />
+	<MultiplayerModule value="false" />
+	<DependedModules>
+		<DependedModule Id="Native" />
+		<DependedModule Id="SandBoxCore" />
+		<DependedModule Id="Sandbox" />
+		<DependedModule Id="StoryMode" />
+		<DependedModule Id="CustomBattle" />
+		<DependedModule Id="Bannerlord.Harmony" />
+	</DependedModules>
+	<DependedModuleMetadatas>
+		<DependedModuleMetadata id="Native" order="LoadBeforeThis" />
+		<DependedModuleMetadata id="SandBoxCore" order="LoadBeforeThis" />
+		<DependedModuleMetadata id="Sandbox" order="LoadBeforeThis" />
+		<DependedModuleMetadata id="StoryMode" order="LoadBeforeThis" />
+		<DependedModuleMetadata id="CustomBattle" order="LoadBeforeThis" />
+		<DependedModuleMetadata id="Bannerlord.Harmony" order="LoadBeforeThis" />
+	</DependedModuleMetadatas>
+	<SubModules>
+		<SubModule>
+			<Name value="BannerlordMilitaryAIOverhaul" />
+			<DLLName value="BannerlordMilitaryAIOverhaul.dll" />
+			<SubModuleClassType value="BannerlordMilitaryAIOverhaul.SubModule" />
+			<Tags>
+				<Tag key="DedicatedServerType" value="none" />
+				<Tag key="IsNoRenderModeElement" value="false" />
+			</Tags>
+		</SubModule>
+	</SubModules>
+	<Xmls />
+</Module>

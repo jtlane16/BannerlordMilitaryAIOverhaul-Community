@@ -1,0 +1,21 @@
+## Build output
+bin/
+obj/
+TestResults/
+*.binlog
+*.dll
+*.exe
+*.pdb
+
+## Rider / VS
+.vs/
+.idea/
+*.user
+*.suo
+
+## Local configuration and diagnostics
+.env
+.env.*
+Logs/
+*.log
+*.sav
