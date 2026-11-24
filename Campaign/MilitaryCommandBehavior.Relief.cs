@@ -60,6 +60,9 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
         internal IReadOnlyList<ReliefObservation> ReliefObservations => _reliefObservations;
         private readonly Dictionary<(Kingdom kingdom, Settlement target), MilitaryObjective> _activeRelief = new();
         private readonly HashSet<Settlement> _fallenReliefTargets = new();
+        // Native Defend clears the flee lock. Preserve the restored order through
+        // this pass, without changing ordinary eligibility on the next one.
+        private readonly HashSet<Army> _reliefRecoveredThisPass = new();
         private bool _reliefReview = true, _reliefPlan = true;
         private bool _reliefResumed;
         private const double ReliefPlanInterval = 1d;
@@ -193,6 +196,7 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             if (plan)
                 _nextReliefPlan = now + ReliefPlanInterval;
             _reliefObservations.Clear();
+            _reliefRecoveredThisPass.Clear();
             var known = Kingdom.All.ToArray();
             var besieged = KingdomCommander.BesiegedFortifications(known);
             if (_relief.Count == 0 && _activeRelief.Count == 0 && _failedRelief.Count == 0 &&
@@ -295,9 +299,16 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
                 _reliefPlan = false;
                 _nextReliefPlan = now + ReliefPlanInterval;
             }
-            if (plan)
-                foreach (var list in jobs)
-                    AllocateRelief(list, now);
+            try
+            {
+                if (plan)
+                    foreach (var list in jobs)
+                        AllocateRelief(list, now);
+            }
+            finally
+            {
+                _reliefRecoveredThisPass.Clear();
+            }
             _fallenReliefTargets.Clear();
             foreach (var pair in _relief.ToArray())
             {
@@ -599,8 +610,11 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
                 state.Reissues++;
                 state.ReissueAfter = now + 1d;
                 ArmyOrders.Defend(army, job.Target);
+                bool restored = ArmyOrders.HasDefendOrder(army, job.Target);
+                if (restoringDuringCampFlee && restored)
+                    _reliefRecoveredThisPass.Add(army);
                 _log.Event($"Relief native defend reissued: {ReliefId(army, assignment)} retry={state.Reissues} " +
-                    $"restored={ArmyOrders.HasDefendOrder(army, job.Target)}" + (restoringDuringCampFlee ? " reason=own-camp-flee." : "."));
+                    $"restored={restored}" + (restoringDuringCampFlee ? " reason=own-camp-flee." : "."));
                 TraceReliefRecovery(army, assignment, "reissue-attempted", now, eta: hours);
             }
             else
@@ -780,6 +794,8 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
                     var inventory = KingdomForces.Read(kingdom);
                     string? Unavailable(Army army)
                     {
+                        if (_reliefRecoveredThisPass.Contains(army))
+                            return "defend-recovered-this-pass";
                         if (localClaims.TryGetValue(army, out var near) && near != job.Target)
                             return adequate.Contains(near) ? "needed-at-viable-siege" : "needed-at-nearer-siege";
                         if (OwnsControlledFixture(army))
@@ -990,7 +1006,8 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
         {
             var army = force.Army!;
             _sieges.TryGetValue(army, out var offense);
-            if (!Registered(army) || OwnsControlledFixture(army) || ArmyTakeoverBehavior.Current?.IsPending(army) == true ||
+            if (_reliefRecoveredThisPass.Contains(army) || !Registered(army) ||
+                OwnsControlledFixture(army) || ArmyTakeoverBehavior.Current?.IsPending(army) == true ||
                 (offense == null ? !ArmyOrders.CanRelease(army) : SiegeDiversionBlocker(army, offense) != null) ||
                 !job.StillEligible || !KingdomCommander.WithinReliefRange(force.Ready))
                 return false;

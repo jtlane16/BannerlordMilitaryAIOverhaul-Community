@@ -842,6 +842,7 @@ public static partial class SmokeFixtures
             TestReliefNoOpMusterCost();
             TestReliefOrderTrace();
             TestFleeingReliefRecovery();
+            TestRecoveredReliefKeepsAssignment();
             if (acceptance != null)
             {
                 TestReliefAcceptance();
@@ -1437,6 +1438,46 @@ public static partial class SmokeFixtures
                 Check(!Defends(leader, lageta) && leader.IsFleeing() && Assignments().Contains(army) &&
                     log.Skip(mark).Count(line => line.Contains("reason=own-camp-flee")) == 2,
                     "the existing two-reissue limit is not bypassed and does not force release while fleeing");
+            }
+        }
+
+        void TestRecoveredReliefKeepsAssignment()
+        {
+            foreach (bool allied in new[]{false, true})
+            {
+                World();
+                var owner = payer;
+                if (allied)
+                {
+                    owner = NewKingdom("recovery-allied-owner");
+                    War(owner.Kingdom, enemy, true);
+                    Alliance(home, owner.Kingdom, true);
+                }
+                var original = Site("recovery-original", 40, owner, castle: true);
+                var competing = Site("recovery-competing-home", 64);
+                var besieger = Lord("recovery-original-camp", hostile, 3100, 40, true);
+                Camp(original, besieger);
+                var leader = Lord("recovery-leader", payer, 750, 44, true);
+                var army = Ready(leader);
+                CampaignTick(1100);
+                Check(Defends(leader, original), "the competing-siege fixture starts with an active defend order");
+
+                ClearOrderForTrace(leader);
+                typeof(MobileParty).GetMethod("SetShortTermBehavior", flags).Invoke(leader,
+                    new object[]{AiBehavior.FleeToPoint, besieger.Party});
+                Camp(competing, Lord("recovery-competing-camp", hostile, 500, 64));
+                int mark = log.Count;
+                CampaignTick(1100.25);
+                Check(log.Skip(mark).Any(line => line.Contains("target=recovery-original") &&
+                    line.Contains("restored=True reason=own-camp-flee")) &&
+                    Defends(leader, original) && leader.Army == army && !leader.IsFleeing() &&
+                    log.Skip(mark).Any(line => line.Contains("Relief review:") && line.Contains("target=recovery-competing-home") &&
+                        line.Contains("defend-recovered-this-pass:1")),
+                    $"same-tick planning cannot redirect a newly restored defense (original allied={allied}, target={leader.TargetSettlement?.StringId})");
+
+                CampaignTick(1101.25);
+                Check(Defends(leader, competing) && leader.Army == army && original.IsUnderSiege && payer.Influence == 250,
+                    $"the next planning pass can redirect the same army intact to the competing siege (original allied={allied})");
             }
         }
 
