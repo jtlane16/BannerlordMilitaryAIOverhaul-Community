@@ -1063,7 +1063,7 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             if (KingdomCommander.HasHomeSiege(kingdom))
                 return false;
             if (old.State.Captured)
-                return TrySiegeFollowOn(army, old.Target, now, old.State.UpkeepAfter);
+                return BeginPostCaptureStay(army, old, now) || TrySiegeFollowOn(army, old.Target, now, old.State.UpkeepAfter);
             var visited = old.State.PreviousTargets ?? new HashSet<string>(StringComparer.Ordinal);
             var targets = kingdom.FactionsAtWarWith.Where(f => !f.IsEliminated)
                 .SelectMany(f => f.Fiefs).Select(t => t.Settlement)

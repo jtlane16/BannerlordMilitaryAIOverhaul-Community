@@ -2320,6 +2320,38 @@ public static partial class SmokeFixtures
                     validNeighbor ? "capture reuses only the viable one-ring neighbor, not a much nearer non-neighbor" :
                         "a repulsed one-ring follow-on is vetoed and the completed formation releases");
             }
+			            var stayHours = mod.GetType("BannerlordMilitaryAIOverhaul.ModSettings", true).GetProperty("StayHoursAfterSiege", flags);
+            stayHours.SetValue(null, 24d);
+            try
+            {
+                World();
+                Site("capture-border", 5);
+                var target = Site("captured-objective", 30, hostile);
+                var other = Site("near-non-neighbor", 34, hostile, castle: true);
+                var neighbor = Site("one-ring-enemy", 55, hostile);
+                graph.Link(target, neighbor);
+                var leader = Lord("capturing-army", payer, 500, 5, true);
+                var original = Ready(leader);
+                Search(1100); NoNewSearch();
+                Move(leader, 30);
+                Camp(target, leader);
+                Tick(1100.25);
+                Field(target.Town, "_ownerClan", payer);
+                Lift(target);
+                dispatcher.OnSettlementOwnerChanged(target, false, null, null, null, ChangeOwnerOfSettlementAction.ChangeOwnerOfSettlementDetail.BySiege);
+                Tick(1100.5);
+                bool stayed = Idle(leader) && !Besieges(leader, neighbor) && other.SiegeEvent == null;
+                Tick(1112.5);
+                                Check(Idle(leader) && !Besieges(leader, neighbor) && other.SiegeEvent == null,
+                    "a configured post-capture stay holds the capturing army without an offensive order");
+                Tick(1112.5);
+                Check(Idle(leader) && !Besieges(leader, neighbor) && other.SiegeEvent == null,
+                    "offensive search cannot take the army during its post-capture stay");
+                Tick(1124.75);
+                Check(leader.Army == original && Besieges(leader, neighbor),
+                    "the post-capture stay ends with the one-ring follow-on for the same army");
+            }
+            finally { stayHours.SetValue(null, 0d); }
             World();
             var savedTown = Site("successfully-relieved-fort", 20);
             var adjacent = Site("relief-follow-on", 45, hostile);

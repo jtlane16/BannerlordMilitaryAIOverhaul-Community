@@ -7,6 +7,7 @@ Name code for the job it does, not the stage that introduced it. Stages in [SPEC
 | Source | Responsibility |
 | --- | --- |
 | `SubModule.cs` | Bannerlord entry point. Install hooks, register campaign behaviors, and open and close the campaign log. |
+| `ModSettings.cs` | Read player-tunable values from `_Module/Settings.xml` at campaign start. A missing file or invalid value keeps the built-in default. |
 | `Campaign/ArmyTakeoverBehavior.cs` | Release inherited AI armies once. Own the pending releases, native event callbacks, and save/load reconciliation. |
 | `Campaign/MilitaryCommandBehavior.cs` | Schedule the daily force report, expose `maio.muster` for campaign testing, and track the active test assignment from muster to release. Persist owned movement recovery and deferred releases, not a copy of the kingdom roster. |
 | `Command/KingdomForces.cs` | Build one kingdom's inventory from current parties and army membership. Distinguish present from traveling strength, and observed troops from troops the commander could assign. |
