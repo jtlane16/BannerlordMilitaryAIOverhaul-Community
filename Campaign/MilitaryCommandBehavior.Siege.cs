@@ -417,7 +417,6 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
 
         private void TickSieges(double now)
         {
-            SiegeOrderTrace.Advance(this, now);
             if (_siegeReview || now >= _nextSiegeReview)
             {
                 using var review = CampaignPerformanceCapture.Measure(CampaignPerformanceCapture.Work.SiegeReview);

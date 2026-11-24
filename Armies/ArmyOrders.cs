@@ -125,12 +125,12 @@ namespace BannerlordMilitaryAIOverhaul.Armies
         internal static bool EventLocked(MobileParty party) =>
             party.MapEvent != null || party.SiegeEvent != null || party.CurrentSettlement?.IsUnderSiege == true;
 
-        internal static string? ReleaseBlocker(MobileParty party) =>
+        internal static string? ReleaseBlocker(MobileParty party, bool ignoreFleeing = false) =>
             party.IsMainParty || PlayerEncounter.EncounteredMobileParty == party ? "player" :
             EventLocked(party) ? "native-event" :
             party.IsTransitionInProgress || party.StartTransitionNextFrameToExitFromPort ? "map-transition" :
             party.IsCurrentlyUsedByAQuest || party.Ai?.DoNotMakeNewDecisions == true ? "party-control-lock" :
-            party.Ai?.IsDisabled == true || party.IsFleeing() ? "native-movement-lock" : null;
+            party.Ai?.IsDisabled == true || (!ignoreFleeing && party.IsFleeing()) ? "native-movement-lock" : null;
 
         internal static bool CanRelease(Army army) =>
             !army.IsDispersing && !Members(army).Any(party => ReleaseBlocker(party) != null);
@@ -248,7 +248,7 @@ namespace BannerlordMilitaryAIOverhaul.Armies
             army.AiBehaviorObject == target && army.LeaderParty.DefaultBehavior == AiBehavior.DefendSettlement &&
             army.LeaderParty.TargetSettlement == target;
 
-        internal static string? VisitLock(MobileParty leader, bool held = false, Army? afterRelease = null)
+        internal static string? VisitLock(MobileParty leader, bool held = false, Army? afterRelease = null, bool ignoreFleeing = false)
         {
             if (leader.IsCurrentlyUsedByAQuest ||
                 (leader.AttachedTo != null && leader.AttachedTo != afterRelease?.LeaderParty) ||
@@ -256,7 +256,7 @@ namespace BannerlordMilitaryAIOverhaul.Armies
                 return "party-control-lock";
             if (leader.IsTransitionInProgress || leader.StartTransitionNextFrameToExitFromPort)
                 return "map-transition";
-            if (leader.Ai.IsDisabled || leader.IsFleeing() ||
+            if (leader.Ai.IsDisabled || (!ignoreFleeing && leader.IsFleeing()) ||
                 leader.ShortTermBehavior is AiBehavior.EngageParty or AiBehavior.JoinParty ||
                 (held && leader.ShortTermBehavior is not (AiBehavior.Hold or AiBehavior.None)))
                 return "native-movement-lock";

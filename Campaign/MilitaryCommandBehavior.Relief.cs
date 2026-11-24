@@ -181,6 +181,7 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
 
         private void TickRelief(double now)
         {
+            SiegeOrderTrace.ReliefStart(this, _relief.Keys, now);
             if (!_reliefReview && !_reliefPlan && now < _nextReliefPlan)
                 return;
             using var timing = CampaignPerformanceCapture.Measure(CampaignPerformanceCapture.Work.Relief);
@@ -279,7 +280,10 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
                 if (assignment.State.End != null)
                     continue;
                 if (!objectiveActive)
+                {
+                    TraceReliefRecovery(army, assignment, "objective-no-longer-active", now);
                     EndRelief(army, assignment, ObjectiveEnd(assignment.Target, army.Kingdom, AssignmentOwner(assignment)));
+                }
                 else
                     ReviewRelief(army, assignment, job!, now);
             }
@@ -413,6 +417,30 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
                     assignment.Surplus.RemoveAt(i);
         }
 
+        internal bool TryReliefTraceSubject(MobileParty leader, string target, out SiegeOrderTrace.Subject subject)
+        {
+            if (!_fixtureOnly && !leader.IsMainParty && leader.Army is Army army && army.LeaderParty == leader &&
+                _relief.TryGetValue(army, out var assignment) && assignment.Target.StringId == target &&
+                assignment.State.Departed && assignment.State.End == null)
+            {
+                subject = ReliefTraceSubject(army, assignment);
+                return true;
+            }
+            subject = default;
+            return false;
+        }
+
+        private static SiegeOrderTrace.Subject ReliefTraceSubject(Army army, ReliefAssignment assignment) =>
+            new(army, assignment.Target, assignment.Target, "-", march: false, reissues: assignment.State.Reissues, relief: true);
+
+        private void TraceReliefRecovery(Army army, ReliefAssignment assignment, string decision, double now,
+            double? eta = null, string? visitLock = null, bool memberLock = false)
+        {
+            if (assignment.State.Departed && SiegeOrderTrace.WatchesRelief(this, army.LeaderParty, assignment.Target))
+                SiegeOrderTrace.ReliefReview(this, ReliefTraceSubject(army, assignment), decision, now,
+                    assignment.State.ReissueAfter, eta, visitLock, memberLock);
+        }
+
         private void ReviewRelief(Army army, ReliefAssignment assignment, MilitaryObjective job, double now)
         {
             var leader = army.LeaderParty;
@@ -422,6 +450,7 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             {
                 // Resume only after the player's involvement ends.
                 ObserveRelief(army, job, "player-protected", 0, 0);
+                TraceReliefRecovery(army, assignment, "player-protected", now);
                 return;
             }
             bool tactical = ReliefFormationLocked(army, members);
@@ -447,14 +476,29 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
                 ObserveRelief(army, job, phase, attached, local, physical: physical);
             }
             if (tactical)
+            {
+                // A cleared order can leave native flee circling its own camp.
+                // Restore the existing assignment only; never unlock release, upkeep,
+                // or orders during a real encounter or for a different threat.
+                if (state.Departed && army.AiBehaviorObject == job.Target && ClearedReliefOrder(leader) &&
+                    leader.IsFleeing() && leader.ShortTermTargetParty?.BesiegerCamp == job.Siege.BesiegerCamp &&
+                    attached > 0f && ArmyOrders.CanDirect(leader, job.Kingdom) &&
+                    !ReliefFormationLocked(army, members, ignoreLeaderFleeing: true) &&
+                    ArmyOrders.VisitLock(leader, ignoreFleeing: true) == null)
+                    ReviewDepartedRelief(army, assignment, job, now, restoringDuringCampFlee: true);
+                else
+                    TraceReliefRecovery(army, assignment, "formation-locked", now, memberLock: true);
                 return;
+            }
             if (!ArmyOrders.CanDirect(leader, job.Kingdom) || attached <= 0f)
             {
+                TraceReliefRecovery(army, assignment, "no-eligible-command-or-strength", now);
                 EndRelief(army, assignment, "no-eligible-command-or-strength");
                 return;
             }
             if (!OwnsReliefOrder(army, assignment) && !(army.AiBehaviorObject == null && ClearedReliefOrder(leader)))
             {
+                TraceReliefRecovery(army, assignment, "external-order", now);
                 _log.Event($"Relief lost order authority: {ReliefId(army, assignment)} actual={leader.DefaultBehavior} " +
                     $"target={leader.TargetSettlement?.StringId ?? "-"}; not overriding external order.");
                 _relief.Remove(army);
@@ -463,31 +507,14 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             ReconcileReliefSummons(army, assignment, registered: true);
             foreach (var party in members.Where(party => party != leader && !ArmyOrders.CanDirect(party, job.Kingdom)))
                 ArmyOrders.ReleaseMember(army, party, _log, "home-relief-member-ineligible");
-            if (ArmyOrders.VisitLock(leader) != null)
+            if (ArmyOrders.VisitLock(leader) is string visitLock)
+            {
+                TraceReliefRecovery(army, assignment, "visit-locked", now, visitLock: visitLock);
                 return;
+            }
             if (state.Departed)
             {
-                double hours = KingdomCommander.ReliefHours(leader, job);
-                if (!job.IsLocal(leader) && !KingdomCommander.WithinReliefRange(hours))
-                {
-                    EndReliefForTravel(army, assignment, hours);
-                    return;
-                }
-                if (!ArmyOrders.HasDefendOrder(army, job.Target))
-                {
-                    if (now < state.ReissueAfter)
-                        return;
-                    if (state.Reissues >= 2 || !ArmyOrders.CanRouteToRelief(leader, KingdomCommander.Origin(leader), job.CampPosition))
-                    {
-                        EndRelief(army, assignment, "cleared-defend-order-not-recoverable");
-                        return;
-                    }
-                    state.Reissues++;
-                    state.ReissueAfter = now + 1d;
-                    ArmyOrders.Defend(army, job.Target);
-                    _log.Event($"Relief native defend reissued: {ReliefId(army, assignment)} retry={state.Reissues} restored={ArmyOrders.HasDefendOrder(army, job.Target)}.");
-                }
-                SustainRelief(army, assignment, now);
+                ReviewDepartedRelief(army, assignment, job, now);
                 return;
             }
             var muster = assignment.Muster!;
@@ -541,6 +568,47 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             DepartRelief(army, assignment, job, now, attached, attached + other.committed + other.support);
         }
 
+        private void ReviewDepartedRelief(Army army, ReliefAssignment assignment, MilitaryObjective job, double now,
+            bool restoringDuringCampFlee = false)
+        {
+            var leader = army.LeaderParty;
+            var state = assignment.State;
+            double hours = KingdomCommander.ReliefHours(leader, job);
+            if (!job.IsLocal(leader) && !KingdomCommander.WithinReliefRange(hours))
+            {
+                TraceReliefRecovery(army, assignment, "relief-travel-limit", now, eta: hours);
+                if (!restoringDuringCampFlee)
+                    EndReliefForTravel(army, assignment, hours);
+                return;
+            }
+            if (!ArmyOrders.HasDefendOrder(army, job.Target))
+            {
+                if (now < state.ReissueAfter)
+                {
+                    TraceReliefRecovery(army, assignment, "reissue-cooldown", now, eta: hours);
+                    return;
+                }
+                bool exhausted = state.Reissues >= 2;
+                if (exhausted || !ArmyOrders.CanRouteToRelief(leader, KingdomCommander.Origin(leader), job.CampPosition))
+                {
+                    TraceReliefRecovery(army, assignment, exhausted ? "reissue-budget-exhausted" : "reissue-path-unavailable", now, eta: hours);
+                    if (!restoringDuringCampFlee)
+                        EndRelief(army, assignment, "cleared-defend-order-not-recoverable");
+                    return;
+                }
+                state.Reissues++;
+                state.ReissueAfter = now + 1d;
+                ArmyOrders.Defend(army, job.Target);
+                _log.Event($"Relief native defend reissued: {ReliefId(army, assignment)} retry={state.Reissues} " +
+                    $"restored={ArmyOrders.HasDefendOrder(army, job.Target)}" + (restoringDuringCampFlee ? " reason=own-camp-flee." : "."));
+                TraceReliefRecovery(army, assignment, "reissue-attempted", now, eta: hours);
+            }
+            else
+                TraceReliefRecovery(army, assignment, "defend-order-intact", now, eta: hours);
+            if (!restoringDuringCampFlee)
+                SustainRelief(army, assignment, now);
+        }
+
         private void EndReliefForTravel(Army army, ReliefAssignment assignment, double hours)
         {
             _log.Event($"Relief travel limit: {ReliefId(army, assignment)} eta={CampaignLog.Number(hours)}h " +
@@ -574,9 +642,9 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             ArmyOrders.Sustain(army, "relief:" + assignment.Target.StringId, _log);
         }
 
-        private static bool ReliefFormationLocked(Army army, IEnumerable<MobileParty> members) => members.Any(party =>
-            party.IsMainParty || ((party == army.LeaderParty || party.AttachedTo == army.LeaderParty) &&
-                ArmyOrders.ReleaseBlocker(party) != null));
+        private static bool ReliefFormationLocked(Army army, IEnumerable<MobileParty> members, bool ignoreLeaderFleeing = false) =>
+            members.Any(party => party.IsMainParty || ((party == army.LeaderParty || party.AttachedTo == army.LeaderParty) &&
+                ArmyOrders.ReleaseBlocker(party, ignoreFleeing: ignoreLeaderFleeing && party == army.LeaderParty) != null));
 
         private void TraceDefendControl(Army army, ReliefAssignment assignment, MobileParty[] members)
         {
