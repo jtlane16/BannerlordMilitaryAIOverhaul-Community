@@ -840,6 +840,9 @@ public static partial class SmokeFixtures
             TestStableReliefAssignments();
             TestReliefTravelLimit();
             TestReliefNoOpMusterCost();
+            TestReliefOrderTrace();
+            TestFleeingReliefRecovery();
+            TestRecoveredReliefKeepsAssignment();
             if (acceptance != null)
             {
                 TestReliefAcceptance();
@@ -1289,6 +1292,195 @@ public static partial class SmokeFixtures
                 "free lords may still muster an understrength response without taking apart an intact army");
         }
 
+        void TestReliefOrderTrace()
+        {
+            World();
+            var lageta = Site("trace-relief-target", 40);
+            var besieger = Lord("trace-relief-besieger", hostile, 3500, 40, true);
+            Camp(lageta, besieger);
+            var meritor = Lord("trace-relief-meritor", payer, 750, 43, true);
+            var arytha = Lord("trace-relief-arytha", payer, 700, 44);
+            var other = Lord("trace-relief-other", payer, 200, 45);
+            var meritorArmy = Ready(meritor);
+            var arythaArmy = Ready(arytha);
+            Ready(other);
+            CampaignTick(1100);
+            Check(Defends(meritor, lageta) && Defends(arytha, lageta) && Defends(other, lageta),
+                "the relief trace fixture begins with three active native defend orders");
+            var unrelated = Lord("trace-relief-unrelated", hostile, 1500, 45);
+            var shortOrder = typeof(MobileParty).GetMethod("SetShortTermBehavior", flags);
+            foreach (var leader in new[] { meritor, arytha })
+            {
+                ClearOrderForTrace(leader);
+                shortOrder.Invoke(leader, new object[]{AiBehavior.FleeToPoint, unrelated.Party});
+            }
+            Reload();
+
+            var trace = mod.GetType("BannerlordMilitaryAIOverhaul.Diagnostics.SiegeOrderTrace", true);
+            var native = typeof(MobileParty).GetMethod("SetMoveModeHold", Type.EmptyTypes);
+            var folder = System.IO.Directory.CreateDirectory(System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(), "maio-relief-trace-" + Guid.NewGuid().ToString("N")));
+            string marker = System.IO.Path.Combine(folder.FullName, "trace-v1.armed");
+            string run = Guid.NewGuid().ToString("N");
+            bool Arm() => (bool)trace.GetMethod("TryClaim", flags).Invoke(null, new object[]{folder.FullName, command, sessionLog});
+            int start = log.Count;
+            string[] Rows() => log.Skip(start).Where(line => line.Contains($"Relief order trace: run={run}")).ToArray();
+            try
+            {
+                System.IO.File.WriteAllText(marker, $"relief-order-v1 {run} {lageta.StringId} {meritor.StringId} {arytha.StringId}");
+                Check(Arm() && !System.IO.File.Exists(marker) &&
+                    System.IO.File.Exists(System.IO.Path.Combine(folder.FullName, $"relief-order-v1.{run}.claimed")),
+                    "the focused relief trace claims a one-shot marker");
+                CampaignTick(1101);
+                Check(Rows().Count(line => line.Contains(" initial ") && line.Contains("activeDepartedAssignment=True") &&
+                    line.Contains("default=Hold") && line.Contains("short=FleeToPoint")) == 2 &&
+                    Rows().Count(line => line.Contains("seq=0 decision=formation-locked") &&
+                        line.Contains(":native-movement-lock") && line.Contains("orderRestored=False")) == 2,
+                    "both saved Hold orders are visible from the first tick even with no new writer; fleeing blocks restoration");
+                Move(arytha, 45);
+                CampaignTick(1103);
+                Check(Rows().Any(line => line.Contains($"army={arytha.StringId}@") &&
+                    line.Contains("decision=formation-locked") && line.Contains("position=(45,0,land)")),
+                    "a continuing lock gets a periodic position sample even without a change of orders");
+                shortOrder.Invoke(meritor, new object[]{AiBehavior.Hold, null});
+                shortOrder.Invoke(arytha, new object[]{AiBehavior.Hold, null});
+                CampaignTick(1104);
+                Check(Defends(meritor, lageta) && Defends(arytha, lageta) && Rows().Count(line =>
+                    line.Contains("seq=0 decision=reissue-attempted") && line.Contains("orderRestored=True")) == 2,
+                    "normal relief recovery restores both orders after fleeing without new summons");
+                ClearOrderForTrace(other);
+                ClearOrderForTrace(arytha);
+                ClearOrderForTrace(arytha);
+                Check(Rows().Count(line => line.Contains(" hold ")) == 1 && Rows().Any(line =>
+                    line.Contains($"army={arytha.StringId}@") && line.Contains("ClearOrderForTrace") &&
+                    line.Contains("before=[default=DefendSettlement") && line.Contains("after=[default=Hold")),
+                    "only the selected defender losing a real order gets a before/after writer trace");
+                CampaignTick(1105);
+                Check(Defends(arytha, lageta) && meritor.Army == meritorArmy && arytha.Army == arythaArmy &&
+                    Rows().Any(line => line.Contains("seq=1 decision=reissue-attempted") && line.Contains("orderRestored=True")) &&
+                    payer.Influence == 250, "the trace leaves the armies, reissue rules and influence unchanged");
+                CampaignTick(1150);
+                Check(Rows().Count(line => line.Contains("finished reason=campaign-window-ended")) == 1,
+                    "the relief trace ends after its bounded window");
+            }
+            finally
+            {
+                trace.GetMethod("Close", flags).Invoke(null, null);
+                foreach (var file in folder.GetFiles()) file.Delete();
+                folder.Delete();
+            }
+            Check(Harmony.GetPatchInfo(native)?.Owners.Contains("BannerlordMilitaryAIOverhaul.SiegeOrderTrace") != true,
+                "the one-shot relief observer does not leave its Hold hook installed after campaign exit");
+        }
+
+        void TestFleeingReliefRecovery()
+        {
+            foreach (string scenario in new[] { "restore", "other-threat", "leader-battle", "attached-battle",
+                "disabled", "unroutable", "out-of-range", "order-intact" })
+            {
+                World();
+                var lageta = Site("flee-relief-target", 40);
+                var besieger = Lord("flee-relief-camp", hostile, 3100, 40, true);
+                Camp(lageta, besieger);
+                var leader = Lord("flee-relief-leader", payer, 750, 44, true);
+                var army = Ready(leader);
+                CampaignTick(1100);
+                Check(Defends(leader, lageta), $"an original relief order precedes the fleeing case ({scenario})");
+                if (scenario != "order-intact")
+                    ClearOrderForTrace(leader);
+                var contact = scenario == "other-threat" ? Lord("flee-relief-unrelated", hostile, 2000, 45) : besieger;
+                var shortOrder = typeof(MobileParty).GetMethod("SetShortTermBehavior", flags);
+                void Flee() => shortOrder.Invoke(leader, new object[]{AiBehavior.FleeToPoint, contact.Party});
+                Flee();
+                if (scenario == "disabled")
+                    leader.Ai.DisableAi();
+                if (scenario == "leader-battle" || scenario == "attached-battle")
+                {
+                    var party = leader;
+                    if (scenario == "attached-battle")
+                    {
+                        party = Lord("flee-relief-attached", payer, 300, 44);
+                        party.Army = army;
+                        army.AddPartyToMergedParties(party);
+                    }
+                    var side = Blank<MapEventSide>();
+                    var battle = Blank<MapEvent>();
+                    Property(battle, "Component", Blank<FieldBattleEventComponent>());
+                    Field(side, "_mapEvent", battle);
+                    Field(party.Party, "_mapEventSide", side);
+                }
+                if (scenario == "unroutable")
+                    blockedFixtureRoute = (from, to) => to == 40;
+                if (scenario == "out-of-range")
+                    Move(leader, 406);
+                int mark = log.Count;
+                Reload();
+                CampaignTick(1101);
+                bool Reissued() => log.Skip(mark).Any(line => line.Contains("Relief native defend reissued:") &&
+                    line.Contains($"army={leader.StringId}@") && line.Contains("restored=True reason=own-camp-flee"));
+                if (scenario != "restore")
+                {
+                    Check(leader.Army == army && Assignments().Contains(army) && !Reissued() &&
+                        Defends(leader, lageta) == (scenario == "order-intact") && leader.IsFleeing(),
+                        $"the narrowly scoped exception leaves the native movement lock intact ({scenario})");
+                    continue;
+                }
+                Check(Defends(leader, lageta) && Reissued() && leader.Army == army && payer.Influence == 250 &&
+                    army.Cohesion == 100 && !log.Skip(mark).Any(line => line.Contains("Muster debit") || line.Contains("Muster release")),
+                    "the saved own-camp flee restores only the cleared native defense, without replacing or paying the army");
+                ClearOrderForTrace(leader); Flee();
+                CampaignTick(1101.5);
+                Check(!Defends(leader, lageta) && leader.IsFleeing(), "the normal one-hour reissue delay still applies while fleeing");
+                CampaignTick(1102);
+                Check(Defends(leader, lageta), "the second normal reissue can restore the same order");
+                ClearOrderForTrace(leader); Flee();
+                CampaignTick(1103);
+                Check(!Defends(leader, lageta) && leader.IsFleeing() && Assignments().Contains(army) &&
+                    log.Skip(mark).Count(line => line.Contains("reason=own-camp-flee")) == 2,
+                    "the existing two-reissue limit is not bypassed and does not force release while fleeing");
+            }
+        }
+
+        void TestRecoveredReliefKeepsAssignment()
+        {
+            foreach (bool allied in new[]{false, true})
+            {
+                World();
+                var owner = payer;
+                if (allied)
+                {
+                    owner = NewKingdom("recovery-allied-owner");
+                    War(owner.Kingdom, enemy, true);
+                    Alliance(home, owner.Kingdom, true);
+                }
+                var original = Site("recovery-original", 40, owner, castle: true);
+                var competing = Site("recovery-competing-home", 64);
+                var besieger = Lord("recovery-original-camp", hostile, 3100, 40, true);
+                Camp(original, besieger);
+                var leader = Lord("recovery-leader", payer, 750, 44, true);
+                var army = Ready(leader);
+                CampaignTick(1100);
+                Check(Defends(leader, original), "the competing-siege fixture starts with an active defend order");
+
+                ClearOrderForTrace(leader);
+                typeof(MobileParty).GetMethod("SetShortTermBehavior", flags).Invoke(leader,
+                    new object[]{AiBehavior.FleeToPoint, besieger.Party});
+                Camp(competing, Lord("recovery-competing-camp", hostile, 500, 64));
+                int mark = log.Count;
+                CampaignTick(1100.25);
+                Check(log.Skip(mark).Any(line => line.Contains("target=recovery-original") &&
+                    line.Contains("restored=True reason=own-camp-flee")) &&
+                    Defends(leader, original) && leader.Army == army && !leader.IsFleeing() &&
+                    log.Skip(mark).Any(line => line.Contains("Relief review:") && line.Contains("target=recovery-competing-home") &&
+                        line.Contains("defend-recovered-this-pass:1")),
+                    $"same-tick planning cannot redirect a newly restored defense (original allied={allied}, target={leader.TargetSettlement?.StringId})");
+
+                CampaignTick(1101.25);
+                Check(Defends(leader, competing) && leader.Army == army && original.IsUnderSiege && payer.Influence == 250,
+                    $"the next planning pass can redirect the same army intact to the competing siege (original allied={allied})");
+            }
+        }
+
         void TestReliefTravelLimit()
         {
             foreach (bool alternate in new[]{false, true})
@@ -1357,7 +1549,7 @@ public static partial class SmokeFixtures
             var passingEnemy = Lord("unrelated-contact", hostile, 50, 44);
             forcePowers[vipon.Party] = 2492;
             hecaron.SetMoveModeHold(); // native party order cleared; army objective still Lageta
-            Contact(hecaron, AiBehavior.FleeToPoint, vipon);
+            Contact(hecaron, AiBehavior.FleeToPoint, passingEnemy);
             int mark = log.Count;
             Reload(); Tick(1102);
             Check(hecaron.DefaultBehavior == AiBehavior.Hold && OwnsClaim(hecaronArmy, lageta, "home", ordered: false) &&
@@ -2442,10 +2634,12 @@ public static partial class SmokeFixtures
                 int start = log.Count;
                 try
                 {
-                    Check(!Arm() && Harmony.GetPatchInfo(native) == null, "an unarmed siege trace installs no Hold patch");
+                    Check(!Arm() && Harmony.GetPatchInfo(native)?.Owners.Contains("BannerlordMilitaryAIOverhaul.SiegeOrderTrace") != true,
+                        "an unarmed siege trace installs no Hold patch");
                     string id = Guid.NewGuid().ToString("N");
                     System.IO.File.WriteAllText(marker, $"siege-order-v1 {id}");
-                    Check(Arm() && !System.IO.File.Exists(marker) && Harmony.GetPatchInfo(native) != null,
+                    Check(Arm() && !System.IO.File.Exists(marker) &&
+                        Harmony.GetPatchInfo(native)?.Owners.Contains("BannerlordMilitaryAIOverhaul.SiegeOrderTrace") == true,
                         "the opt-in trace claims one marker and observes the exact native Hold method");
                     ClearOrderForTrace(player);
                     ClearOrderForTrace(escort);

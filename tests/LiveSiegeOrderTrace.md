@@ -12,6 +12,12 @@ Trace lines are mixed into the normal campaign log and carry their own run ID. L
 
 The observer captures active AI siege leaders in muster or march, before camp or closure. It is capped at 32 campaign days, 128 traced assignments, 12 relevant Hold calls and 32 review rows per assignment. A plain `Hold` with no targets is not repeatedly sampled. An observed writer → clear → review chain is evidence for that incident. No repeat or an untraced interruption does not prove who cleared previous orders.
 
+## Inspecting a saved relief order
+
+Use the same `trace-v1.armed` marker with `relief-order-v1 <GUID in N format> <settlement-id> <leader-party-id> [second-leader-party-id]`. For the Lageta save the IDs are `town_EW1 lord_1_26_party_1 lord_1_62_1_party_1`. Load the affected save first. The new `Relief order trace: … armed` lines go to the normal Desktop campaign log. Let the map run for up to two in-game days without overwriting the starting save.
+
+`initial` records the watched assignments before the first relief review, even if their orders are already gone. `review` records the actual reason a reissue waits, whether it succeeded, and the native short-term movement; unchanged states get a sample every two campaign hours. `hold` records the caller only when a subsequent `SetMoveModeHold()` hits an active defend order. The trace observes at most two formations, 12 relevant Hold calls and 64 review rows per formation. It cannot reconstruct a call from before the save.
+
 ## Checking progress-based recovery
 
 Live session `6917cbc2` traced 13 clears from native field battle or raid cleanup. Twelve reissues restored the order and five of the traced armies reached camp. That run did not include a third clear in the same phase.

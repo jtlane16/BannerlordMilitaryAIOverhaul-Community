@@ -37,7 +37,8 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             var mobile = new HashSet<Army>();
             foreach (var army in forces.Armies)
             {
-                if (!Registered(army) || OwnsControlledFixture(army) || ArmyTakeoverBehavior.Current?.IsPending(army) == true)
+                if (_reliefRecoveredThisPass.Contains(army) || !Registered(army) ||
+                    OwnsControlledFixture(army) || ArmyTakeoverBehavior.Current?.IsPending(army) == true)
                     continue;
                 if (_relief.TryGetValue(army, out var claim))
                 {

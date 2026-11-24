@@ -276,6 +276,7 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             }
             if (!_fixtureOnly)
             {
+                SiegeOrderTrace.Advance(this, now);
                 TickRelief(now);
                 TickSieges(now);
             }
