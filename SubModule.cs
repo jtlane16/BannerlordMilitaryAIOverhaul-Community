@@ -71,6 +71,7 @@ namespace BannerlordMilitaryAIOverhaul
             if (_patchesInstalled && game.GameType is NativeCampaign campaign && gameStarter is CampaignGameStarter starter)
             {
                 var log = CampaignLog.Open(campaign);
+                ModSettings.Load();
                 CampaignPerformanceCapture.Open();
                 _takeover = new ArmyTakeoverBehavior(campaign, log);
                 starter.AddBehavior(_takeover);

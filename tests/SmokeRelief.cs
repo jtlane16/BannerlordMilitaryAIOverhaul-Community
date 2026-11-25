@@ -2320,6 +2320,117 @@ public static partial class SmokeFixtures
                     validNeighbor ? "capture reuses only the viable one-ring neighbor, not a much nearer non-neighbor" :
                         "a repulsed one-ring follow-on is vetoed and the completed formation releases");
             }
+			var stayHours = mod.GetType("BannerlordMilitaryAIOverhaul.ModSettings", true).GetProperty("StayHoursAfterSiege", flags);
+            string ringPreferred = null;
+            try
+            {
+                foreach (string stayCase in new[]{"timing", "lock-outlasts-stay", "abandoned-control", "abandoned-neighbor",
+                    "home-siege-lifted", "home-siege-held", "defense"})
+                {
+                    bool locked = stayCase == "timing" || stayCase == "lock-outlasts-stay";
+                    bool abandonedCase = stayCase.StartsWith("abandoned", StringComparison.Ordinal);
+                    stayHours.SetValue(null, stayCase == "lock-outlasts-stay" ? 8d : 24d);
+                    World();
+                    Site("capture-border", 5);
+                    var target = Site("captured-objective", 30, hostile);
+                    var other = Site("near-non-neighbor", 34, hostile, castle: true);
+                    var neighbor = Site("one-ring-enemy", 55, hostile);
+                    graph.Link(target, neighbor);
+                    var ringSecond = abandonedCase ? Site("one-ring-second", 70, hostile) : null;
+                    if (ringSecond != null)
+                        graph.Link(target, ringSecond);
+                    var stayHome = stayCase.StartsWith("home-siege", StringComparison.Ordinal) ? Site("stay-distant-home", 50, castle: true) : null;
+                    var stayNearHome = stayCase == "defense" ? Site("stay-near-home", 20, castle: true) : null;
+                    var leader = Lord("capturing-army", payer, 500, 5, true);
+                    var original = Ready(leader);
+                    Search(1100); NoNewSearch();
+                    Check(Besieges(leader, target), $"{stayCase}: the army starts from a real siege order on the objective");
+                    if (stayCase == "abandoned-neighbor")
+                        Field(SiegeState(original), "PreviousTargets", new HashSet<string>(StringComparer.Ordinal) { ringPreferred });
+                    Move(leader, 30);
+                    Camp(target, leader);
+                    Tick(1100.25);
+                    Check(Saved<double>(SiegeState(original), "CapturedHour") == -1, $"{stayCase}: no capture hour before the capture");
+                    Field(target.Town, "_ownerClan", payer);
+                    Lift(target);
+                    dispatcher.OnSettlementOwnerChanged(target, false, null, null, null, ChangeOwnerOfSettlementAction.ChangeOwnerOfSettlementDetail.BySiege);
+                    Check(Saved<double>(SiegeState(original), "CapturedHour") == 1100.25, $"{stayCase}: the capture hour is recorded at the owner change");
+                    if (locked)
+                    {
+                        // Same member and duration as KingdomManager.SiegeCompleted in 1.5.7.
+                        leader.Ai.DisableForHours(10);
+                        Tick(1105);
+                        Check(!IdlePeriods().Contains(original) && ((IDictionary)behavior.GetField("_sieges", flags).GetValue(command)).Contains(original),
+                            $"{stayCase}: the native post-capture lock defers cleanup");
+                        Reload(); NoNewSearch();
+                        Check(Saved<double>(SiegeState(original), "CapturedHour") == 1100.25,
+                            $"{stayCase}: the capture hour survives a save while cleanup is deferred");
+                        leader.Ai.EnableAi(); // native MobilePartyAi.TickInternal does this once the 10 hours are past
+                        Tick(1110.25);
+                    }
+                    else
+                    {
+                        if (stayHome != null)
+                        {
+                            fixtureRouteDistance = (from, to) => to == 50 ? 985 : Math.Abs(from - to);
+                            Camp(stayHome, Lord("stay-home-besieger", hostile, 900, 50, true));
+                        }
+                        Tick(1100.5);
+                    }
+                    if (stayCase == "lock-outlasts-stay")
+                    {
+                        Check(leader.Army == original && Besieges(leader, neighbor) && !IdlePeriods().Contains(original),
+                            "a native lock longer than the stay uses it up; the one-ring follow-on starts at release");
+                        continue;
+                    }
+                    Check(Idle(leader) && Saved<string>(IdlePeriods()[original], "StayAt") == target.StringId &&
+                        Saved<double>(IdlePeriods()[original], "StayUntil") == 1124.25 &&
+                        Saved<double>(IdlePeriods()[original], "Until") == 1148.25 &&
+                        !Besieges(leader, neighbor) && other.SiegeEvent == null,
+                        $"{stayCase}: the stay counts from the capture, not the cleanup, and holds without an offensive order");
+                    if (stayCase == "abandoned-neighbor")
+                        Check(Saved<HashSet<string>>(IdlePeriods()[original], "Abandoned").Contains(ringPreferred),
+                            "the stay keeps the army's abandoned targets");
+                    if (stayCase == "defense")
+                    {
+                        Camp(stayNearHome, Lord("stay-near-besieger", hostile, 300, 20, true));
+                        Tick(1101);
+                        Check(leader.Army == original && Defends(leader, stayNearHome) && !IdlePeriods().Contains(original),
+                            "home defense can still take the army during its post-capture stay");
+                        continue;
+                    }
+                    Reload(); NoNewSearch();
+                    Check(Saved<string>(IdlePeriods()[original], "StayAt") == target.StringId &&
+                        Saved<double>(IdlePeriods()[original], "StayUntil") == 1124.25, $"{stayCase}: the stay survives a save");
+                    if (stayCase == "home-siege-lifted")
+                        Lift(stayHome);
+                    Search(1112.5); NoNewSearch();
+                    Check(Idle(leader) && !Besieges(leader, neighbor) && !Besieges(leader, other) &&
+                        (ringSecond == null || !Besieges(leader, ringSecond)),
+                        $"{stayCase}: a real offensive search cannot take the army during the stay");
+                    Tick(1124);
+                    Check(Idle(leader) && Saved<string>(IdlePeriods()[original], "StayAt") == target.StringId,
+                        $"{stayCase}: no early end before capture + StayHoursAfterSiege");
+                    Tick(1124.25);
+                    if (stayCase == "home-siege-held")
+                        Check(Idle(leader) && Saved<string>(IdlePeriods()[original], "StayAt") == null &&
+                            Saved<double>(IdlePeriods()[original], "Until") == 1148.25 && !Besieges(leader, neighbor),
+                            "an active home siege still blocks the follow-on at stay end; ordinary grace continues");
+                    else if (stayCase == "abandoned-control")
+                    {
+                        ringPreferred = Besieges(leader, neighbor) ? neighbor.StringId : Besieges(leader, ringSecond) ? ringSecond.StringId : null;
+                        Check(leader.Army == original && ringPreferred != null,
+                            "control: with nothing abandoned the stay ends with a one-ring follow-on");
+                    }
+                    else if (stayCase == "abandoned-neighbor")
+                        Check(leader.Army == original && Besieges(leader, ringPreferred == neighbor.StringId ? ringSecond : neighbor),
+                            "the follow-on skips the abandoned best-ranked neighbor and takes the other viable one");
+                    else
+                        Check(leader.Army == original && Besieges(leader, neighbor),
+                            $"{stayCase}: the stay ends exactly at capture + StayHoursAfterSiege with the one-ring follow-on");
+                }
+            }
+            finally { stayHours.SetValue(null, 0d); }
             World();
             var savedTown = Site("successfully-relieved-fort", 20);
             var adjacent = Site("relief-follow-on", 45, hostile);

@@ -91,6 +91,8 @@ This record survives save/load and is not reset by a different leader, payer, mu
 
 **Commander offensive follow-up rule:** After capture or relief, consider an immediate offensive follow-up only at a neighbor of the completed objective's fortification on the game's fortification graph. Check the army's actual navigable route and strength before assigning it. No viable follow-up or defense means an eligible army enters idle grace. The one-ring limit applies to immediate follow-ons, not a later ordinary planning pass.
 
+**Stay after a capture:** `StayHoursAfterSiege` in `_Module/Settings.xml` (default 0 when absent) delays the one-ring follow-up. The stay is counted from the observed capture, so native post-capture cleanup, which locks the leader's AI, uses part of it; the commander never overrides that lock. A commander army that captures a fortification and has no defense to take holds in place until capture + `StayHoursAfterSiege`, also while a home siege blocks offense. Relief and defense planners can still take it; offensive planners cannot. When the stay ends, check defense, then the one-ring follow-up once (skipping abandoned targets), then the ordinary 24-hour idle grace. The capture time, the stay and its end survive reload. Native dispersal, loss of authority and an unsustainable formation keep their own handling.
+
 ## Assigning the kingdom's forces
 
 Consider existing AI armies, parties traveling to muster, and eligible independent parties together. Count each party once. Distinguish strength present now from strength that can arrive by the time it is needed.

@@ -19,6 +19,8 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             public string? FailedMusterKey, FailedReliefKey;
             public double Until;
             public HashSet<string>? Abandoned;
+            public string? StayAt;
+            public double StayUntil;
         }
         private readonly Dictionary<Army, IdlePeriod> _idle = new();
 
@@ -52,7 +54,7 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
 
         // Only a closing assignment may enter grace; never infer it from Hold.
         private bool BeginIdle(Army army, double now, string reason, HashSet<string>? abandoned = null,
-            string? failedMusterKey = null, string? failedReliefKey = null)
+            string? failedMusterKey = null, string? failedReliefKey = null, Settlement? stayAt = null, double stayUntil = 0d)
         {
             if (!Registered(army) || OwnsControlledFixture(army) || ArmyTakeoverBehavior.Current?.IsPending(army) == true ||
                 !ArmyOrders.CanRelease(army) || army.LeaderParty.BesiegerCamp != null || UnsustainableIdle(army))
@@ -62,11 +64,25 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             _relief.Remove(army);
             if (!_idle.ContainsKey(army))
             {
-                _idle.Add(army, new IdlePeriod { Kingdom = army.Kingdom.StringId, Until = now + IdleGraceHours,
-                    Abandoned = abandoned, FailedMusterKey = failedMusterKey, FailedReliefKey = failedReliefKey });
-                _log.Event($"Army idle grace started: kingdom={army.Kingdom.StringId} army={CampaignLog.ArmyId(army)} ended={reason} until={now + IdleGraceHours:R}.");
+                double until = (stayAt == null ? now : stayUntil) + IdleGraceHours;
+                _idle.Add(army, new IdlePeriod { Kingdom = army.Kingdom.StringId, Until = until,
+                    Abandoned = abandoned, FailedMusterKey = failedMusterKey, FailedReliefKey = failedReliefKey,
+                    StayAt = stayAt?.StringId, StayUntil = stayAt == null ? 0d : stayUntil });
+                _log.Event($"Army idle grace started: kingdom={army.Kingdom.StringId} army={CampaignLog.ArmyId(army)} ended={reason} until={until:R}" +
+                    (stayAt == null ? "." : $" stayAt={stayAt.StringId} stayUntil={stayUntil:R}; offense waits, defense may still call."));
             }
             return true;
+        }
+
+        // Hold a capturing army before its one-ring follow-on. Count from the observed capture,
+        // so native post-capture cleanup uses part of the stay; never override that lock.
+        private bool BeginPostCaptureStay(Army army, SiegeAssignment old, double now)
+        {
+            if (ModSettings.StayHoursAfterSiege <= 0d)
+                return false;
+            double stayUntil = (old.State.CapturedHour >= 0 ? old.State.CapturedHour : now) + ModSettings.StayHoursAfterSiege;
+            return stayUntil > now &&
+                BeginIdle(army, now, old.State.End ?? "native-capture", old.State.PreviousTargets, stayAt: old.Target, stayUntil: stayUntil);
         }
 
         private static bool UnsustainableIdle(Army army)
@@ -77,7 +93,11 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
 
         private bool IdleTargetAllowed(Army army, Settlement target)
         {
-            if (!_idle.TryGetValue(army, out var period) || period.Abandoned?.Contains(target.StringId) != true)
+            if (!_idle.TryGetValue(army, out var period))
+                return true;
+            if (period.StayAt != null)
+                return false; // post-capture stay: no offense until it ends
+            if (period.Abandoned?.Contains(target.StringId) != true)
                 return true;
             // Don't bounce between the same failed objectives during grace.
             if (!_preCampFailures.TryGetValue(SiegeKey(period.Kingdom, target), out var failure))
@@ -116,6 +136,15 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
                     continue;
                 }
                 bool unsustainable = UnsustainableIdle(army);
+                if (pair.Value.StayAt is string stayAt && now >= pair.Value.StayUntil)
+                {
+                    pair.Value.StayAt = null;
+                    _log.Event($"Army post-capture stay ended: army={CampaignLog.ArmyId(army)} settlement={stayAt}.");
+                    var captured = Settlement.All.FirstOrDefault(site => site.StringId == stayAt);
+                    if (!unsustainable && (TryReadyDefense(army, now) ||
+                                           (captured != null && TrySiegeFollowOn(army, captured, now, 0d))))
+                        continue;
+                }
                 if (!unsustainable && now < pair.Value.Until)
                     continue;
                 if (!unsustainable && TryAssignAtIdleExpiry(army, now))

@@ -1,0 +1,7 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- Restart the campaign (load a save or start a new game) after editing. Missing or invalid values use the default. -->
+<Settings>
+    <!-- Campaign hours, counted from the capture, that a commander army stays in a fortification it just captured before taking a new offensive order.
+     Defense and relief can still call it during the stay. 0 = no stay (default when this file is missing). -->
+    <StayHoursAfterSiege value="24" />
+</Settings>

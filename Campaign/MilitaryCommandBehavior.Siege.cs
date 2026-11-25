@@ -27,6 +27,7 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             public string? End;
             public bool Issued, FreshDeparture, Arrived, Assault, AssaultSelected, Captured, OwnerEpochEnded;
             public double DepartureHour, CampHour = -1, UpkeepAfter, ReissueAfter, MusterProgressAt, MusterBest = -1, NextMarchCheck;
+            public double CapturedHour = -1;
             public float MusterPeak, CommittedPower;
             public int Reissues;
             public bool ReissueOrderConfirmed;
@@ -145,6 +146,8 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
                     pair.Value.State.Captured |= detail == ChangeOwnerOfSettlementAction.ChangeOwnerOfSettlementDetail.BySiege &&
                         target.MapFaction?.StringId == pair.Value.State.Kingdom && pair.Value.State.Issued &&
                         (pair.Value.State.CampHour >= 0 || InCamp(pair.Key, target) != null);
+                    if (pair.Value.State.Captured && pair.Value.State.CapturedHour < 0)
+                        pair.Value.State.CapturedHour = CampaignTime.Now.ToHours;
                 }
                 _siegeReview = true;
             });
@@ -1060,6 +1063,8 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             var kingdom = army.Kingdom;
             if (TryReadyDefense(army, now, old))
                 return true;
+            if (old.State.Captured && BeginPostCaptureStay(army, old, now))
+                return true;
             if (KingdomCommander.HasHomeSiege(kingdom))
                 return false;
             if (old.State.Captured)
@@ -1084,7 +1089,8 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             if (!EligibleSiegeArmy(army) || !from.IsFortification || KingdomCommander.HasHomeSiege(army.Kingdom))
                 return false;
             var kingdom = army.Kingdom;
-            var choice = KingdomCommander.ChooseSiege(kingdom, from.Town.GetNeighborFortifications(MobileParty.NavigationType.All),
+            var choice = KingdomCommander.ChooseSiege(kingdom, 
+                from.Town.GetNeighborFortifications(MobileParty.NavigationType.All).Where(target => IdleTargetAllowed(army, target)),
                 new[] { army }, null, target => target == from ? "completed-fief" : SiegeTargetBlocker(kingdom, target, now, army),
                 _ => false, _ => { }, _ => { }, (_, _, _) => false, priorCamp: target => PriorCamp(kingdom, target));
             return choice != null && StartSiege(kingdom, choice, now, $"one-ring-after-{from.StringId}", upkeepAfter);
