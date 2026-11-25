@@ -54,7 +54,7 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
 
         // Only a closing assignment may enter grace; never infer it from Hold.
         private bool BeginIdle(Army army, double now, string reason, HashSet<string>? abandoned = null,
-            string? failedMusterKey = null, string? failedReliefKey = null, Settlement? stayAt = null)
+            string? failedMusterKey = null, string? failedReliefKey = null, Settlement? stayAt = null, double stayUntil = 0d)
         {
             if (!Registered(army) || OwnsControlledFixture(army) || ArmyTakeoverBehavior.Current?.IsPending(army) == true ||
                 !ArmyOrders.CanRelease(army) || army.LeaderParty.BesiegerCamp != null || UnsustainableIdle(army))
@@ -64,21 +64,26 @@ namespace BannerlordMilitaryAIOverhaul.Campaign
             _relief.Remove(army);
             if (!_idle.ContainsKey(army))
             {
-                double stay = stayAt == null ? 0d : ModSettings.StayHoursAfterSiege;
-                double until = now + stay + IdleGraceHours;
+                double until = (stayAt == null ? now : stayUntil) + IdleGraceHours;
                 _idle.Add(army, new IdlePeriod { Kingdom = army.Kingdom.StringId, Until = until,
                     Abandoned = abandoned, FailedMusterKey = failedMusterKey, FailedReliefKey = failedReliefKey,
-                    StayAt = stayAt?.StringId, StayUntil = now + stay });
+                    StayAt = stayAt?.StringId, StayUntil = stayAt == null ? 0d : stayUntil });
                 _log.Event($"Army idle grace started: kingdom={army.Kingdom.StringId} army={CampaignLog.ArmyId(army)} ended={reason} until={until:R}" +
-                           (stayAt == null ? "." : $" stayAt={stayAt.StringId} stayUntil={now + stay:R}; offense waits, defense may still call."));
+                    (stayAt == null ? "." : $" stayAt={stayAt.StringId} stayUntil={stayUntil:R}; offense waits, defense may still call."));
             }
             return true;
         }
 
-        // Hold a capturing army in place before its one-ring follow-on.
-        private bool BeginPostCaptureStay(Army army, SiegeAssignment old, double now) =>
-            ModSettings.StayHoursAfterSiege > 0d &&
-            BeginIdle(army, now, old.State.End ?? "native-capture", old.State.PreviousTargets, stayAt: old.Target);
+        // Hold a capturing army before its one-ring follow-on. Count from the observed capture,
+        // so native post-capture cleanup uses part of the stay; never override that lock.
+        private bool BeginPostCaptureStay(Army army, SiegeAssignment old, double now)
+        {
+            if (ModSettings.StayHoursAfterSiege <= 0d)
+                return false;
+            double stayUntil = (old.State.CapturedHour >= 0 ? old.State.CapturedHour : now) + ModSettings.StayHoursAfterSiege;
+            return stayUntil > now &&
+                BeginIdle(army, now, old.State.End ?? "native-capture", old.State.PreviousTargets, stayAt: old.Target, stayUntil: stayUntil);
+        }
 
         private static bool UnsustainableIdle(Army army)
         {
